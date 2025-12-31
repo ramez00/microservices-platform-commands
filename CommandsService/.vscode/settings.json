@@ -1,0 +1,6 @@
+{
+  "omnisharp.useModernNet": true,
+  "omnisharp.sdkPath": "C:\\Program Files\\dotnet\\sdk\\9.0.100",
+  "omnisharp.enableRoslynAnalyzers": true,
+  "omnisharp.enableEditorConfigSupport": true
+}
