@@ -4,17 +4,17 @@ A .NET 9.0 microservices solution demonstrating inter-service communication patt
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Services](#services)
-- [Technology Stack](#technology-stack)
-- [Communication Patterns](#communication-patterns)
-- [Prerequisites](#prerequisites)
-- [Getting Started](#getting-started)
-- [Configuration](#configuration)
-- [API Endpoints](#api-endpoints)
-- [Deployment](#deployment)
-- [Project Structure](#project-structure)
+- [Overview](#-overview)
+- [Architecture](#-architecture)
+- [Services](#-services)
+- [Technology Stack](#-technology-stack)
+- [Communication Patterns](#-communication-patterns)
+- [Prerequisites](#-prerequisites)
+- [Getting Started](#-getting-started)
+- [Configuration](#-configuration)
+- [API Endpoints](#-api-endpoints)
+- [Deployment](#-deployment)
+- [Project Structure](#-project-structure)
 
 ## 🎯 Overview
 
@@ -131,67 +131,110 @@ The services communicate using multiple patterns:
 
 ## 📦 Prerequisites
 
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop) (for containerization)
-- [Kubernetes](https://kubernetes.io/) (for deployment)
-- [RabbitMQ](https://www.rabbitmq.com/) (or use Docker)
-- [SQL Server](https://www.microsoft.com/sql-server) (for production)
+To run the two services locally you need:
+
+- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) or newer
+- A RabbitMQ broker on `localhost:5672`, either through [Docker Desktop](https://www.docker.com/products/docker-desktop) or a local [RabbitMQ](https://www.rabbitmq.com/) install
+
+SQL Server is **not** needed locally: in Development both services use an in-memory database.
+
+To deploy to Kubernetes you additionally need:
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop) with Kubernetes enabled (or another cluster) and `kubectl`
+- The [NGINX Ingress Controller](https://kubernetes.github.io/ingress-nginx/deploy/) if you want to use the ingress
 
 ## 🚀 Getting Started
 
-### Local Development Setup
+### Run locally
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd Soluation
-   ```
+The start order matters: **RabbitMQ, then PlatformService, then CommandsService.** CommandsService calls PlatformService over gRPC and connects to RabbitMQ while it starts, and it exits if either is missing.
 
-2. **Start RabbitMQ** (using Docker)
-   ```bash
-   docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
-   ```
+#### 1. Clone the repository
 
-3. **Start SQL Server** (for production mode)
-   ```bash
-   docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=P@ssw0rd!" -p 14333:1433 --name sqlserver -d mcr.microsoft.com/mssql/server:2017-latest
-   ```
+```bash
+git clone https://github.com/ramez00/microservices-platform-commands.git
+cd microservices-platform-commands
+```
 
-4. **Run PlatformService**
-   ```bash
-   cd PlatformService
-   dotnet restore
-   dotnet run
-   ```
-   Service will be available at:
-   - HTTP API: `http://localhost:5279`
-   - gRPC: `http://localhost:7196`
+#### 2. Start RabbitMQ
 
-5. **Run CommandsService**
-   ```bash
-   cd CommandsService
-   dotnet restore
-   dotnet run
-   ```
-   Service will be available at:
-   - HTTP API: `http://localhost:6000`
+```bash
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+```
 
-### Using Docker
+Skip this step if RabbitMQ is already installed and running on your machine. The management UI is at http://localhost:15672 (user `guest`, password `guest`).
 
-1. **Build Docker images**
-   ```bash
-   cd PlatformService
-   docker build -t platformservice:latest .
-   
-   cd ../CommandsService
-   docker build -t commandservice:latest .
-   ```
+#### 3. Start PlatformService
 
-2. **Run containers**
-   ```bash
-   docker run -p 5279:80 -p 7196:666 platformservice:latest
-   docker run -p 6000:8080 commandservice:latest
-   ```
+Open a terminal in the repository root:
+
+```bash
+dotnet run --project PlatformService
+```
+
+Wait for these lines:
+
+```
+--> Using InMem Db
+--> Seeding Data.....
+Now listening on: http://localhost:7196
+Now listening on: http://localhost:5279
+```
+
+| Endpoint | Address |
+|----------|---------|
+| REST API | `http://localhost:5279` |
+| gRPC     | `http://localhost:7196` |
+
+#### 4. Start CommandsService
+
+Open a **second** terminal in the repository root:
+
+```bash
+dotnet run --project CommandsService
+```
+
+Wait for these lines:
+
+```
+--> Calling GRPC Server http://localhost:7196
+--> Seeding new platforms...
+==> Connected to RabbitMQ and listening for messages.
+Now listening on: http://localhost:6000
+```
+
+| Endpoint | Address |
+|----------|---------|
+| REST API | `http://localhost:6000` |
+
+#### 5. Check that it works
+
+Follow the steps in [Testing](#-testing) to create a platform in PlatformService and watch it arrive in CommandsService.
+
+#### Stopping
+
+Press `Ctrl+C` in each terminal, then stop the broker with `docker stop rabbitmq` (start it again later with `docker start rabbitmq`). All data is in memory, so every restart begins with the four seeded platforms.
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| CommandsService exits at startup with a `NullReferenceException` | PlatformService or RabbitMQ is not running. Start them first, then start CommandsService again. |
+| PlatformService console shows `Could not connect to the Message Bus` and requests return 500 | RabbitMQ is not reachable on `localhost:5672`. Start it and restart PlatformService. |
+| `http://localhost:6000` does not open in the browser (`ERR_UNSAFE_PORT`) | Chrome, Edge and Firefox block port 6000. Use PowerShell, curl or Postman instead. |
+| `address already in use` | Another process holds port 5279, 7196 or 6000. Stop it, or change the port in `appsettings.json` (PlatformService) or `Properties/launchSettings.json` (CommandsService). If you change the gRPC port, update `GrpcPlatform` in CommandsService too. |
+| A created platform never shows up in CommandsService | CommandsService was not running when the event was published. Restart it and it reloads all platforms over gRPC. |
+
+### Build the Docker images
+
+```bash
+docker build -t <your-dockerhub-user>/platformservice PlatformService
+docker build -t <your-dockerhub-user>/commandservice CommandsService
+docker push <your-dockerhub-user>/platformservice
+docker push <your-dockerhub-user>/commandservice
+```
+
+Containers run in the Production environment, where the services look for SQL Server, RabbitMQ and each other under their Kubernetes service names (see `appsettings.Production.json`). The images are therefore meant for the [Kubernetes deployment](#-deployment) below and do not work with a plain `docker run`.
 
 ## ⚙️ Configuration
 
@@ -298,41 +341,71 @@ Create a new command for a platform.
 
 ### Kubernetes Deployment
 
-The solution includes Kubernetes deployment manifests in the `K8S` directory:
+The manifests are in the `K8S` directory. Apply them in this order from the repository root.
 
-1. **Deploy SQL Server**
+1. **Create the SQL Server password secret**
+
+   The SQL Server deployment reads its `sa` password from a secret named `mssql`. It must match the password in the `PlatformsConn` connection string in `PlatformService/appsettings.Production.json`.
+
    ```bash
-   kubectl apply -f K8S/mssql-plat-depl.yaml
-   kubectl apply -f K8S/local-pvc.yaml
+   kubectl create secret generic mssql --from-literal=SA_PASSWORD="P@ssw0rd!"
    ```
 
-2. **Deploy RabbitMQ**
+2. **Deploy SQL Server**
+   ```bash
+   kubectl apply -f K8S/local-pvc.yaml
+   kubectl apply -f K8S/mssql-plat-depl.yaml
+   ```
+
+3. **Deploy RabbitMQ**
    ```bash
    kubectl apply -f K8S/rabbitmq-depl.yaml
    ```
 
-3. **Deploy PlatformService**
+4. **Deploy PlatformService**
    ```bash
    kubectl apply -f K8S/platforms-deply.yaml
    ```
 
-4. **Deploy CommandsService**
+5. **Deploy CommandsService**
    ```bash
    kubectl apply -f K8S/commands-deply.yaml
    ```
 
-5. **Deploy Ingress** (optional)
+6. **Deploy the Ingress** (optional, needs the NGINX Ingress Controller)
    ```bash
    kubectl apply -f K8S/ingress-srv.yaml
    ```
 
+   The ingress routes the host `acme.com`. Add this line to your hosts file (`C:\Windows\System32\drivers\etc\hosts` on Windows, `/etc/hosts` on Linux and macOS):
+
+   ```
+   127.0.0.1 acme.com
+   ```
+
+   The APIs are then available at `http://acme.com/api/platform` and `http://acme.com/api/c/platforms`.
+
+7. **Check the result**
+   ```bash
+   kubectl get pods
+   kubectl get services
+   kubectl logs deployment/platforms-depl
+   kubectl logs deployment/commands-depl
+   ```
+
+   All pods should reach `Running`. If CommandsService started before PlatformService or RabbitMQ were ready, restart it:
+
+   ```bash
+   kubectl rollout restart deployment commands-depl
+   ```
+
 ### Docker Images
 
-The deployment uses pre-built Docker images:
+The deployments pull pre-built images from Docker Hub:
 - `ramez007/platformservice:latest`
 - `ramez007/commandservice:latest`
 
-To use your own images, update the deployment YAML files.
+To deploy your own code changes, build and push the images under your own Docker Hub user (see [Build the Docker images](#build-the-docker-images)), change the `image:` lines in `K8S/platforms-deply.yaml` and `K8S/commands-deply.yaml`, and apply the manifests again.
 
 ## 📁 Project Structure
 
@@ -445,29 +518,65 @@ The `PlatformDataClient` class:
 
 ## 🧪 Testing
 
-### Test API Endpoints
+With both services running locally, these steps exercise all three communication paths. The commands are for PowerShell; the `curl` equivalents follow.
 
-1. **Test PlatformService**
-   ```bash
-   curl http://localhost:5279/api/Platform/testApi
+1. **List the platforms in PlatformService** (four are seeded)
+   ```powershell
+   Invoke-RestMethod http://localhost:5279/api/Platform
    ```
 
-2. **Test CommandsService**
-   ```bash
-   curl http://localhost:6000/api/c/Platforms/testAPI
+2. **List the platforms in CommandsService** — the same four, copied over gRPC at startup
+   ```powershell
+   Invoke-RestMethod http://localhost:6000/api/c/Platforms/platforms
    ```
 
-3. **Create Platform**
-   ```bash
-   curl -X POST http://localhost:5279/api/Platform/CreatePlatForm \
-     -H "Content-Type: application/json" \
-     -d '{"name":"Docker","cost":"Free","publisher":"Docker Inc"}'
+3. **Create a platform** — this publishes a `Platform_Published` event to RabbitMQ
+   ```powershell
+   Invoke-RestMethod -Method Post http://localhost:5279/api/Platform/CreatePlatForm `
+     -ContentType 'application/json' `
+     -Body '{"name":"Kubernetes","cost":"Free","publisher":"CNCF"}'
    ```
 
-4. **Get Commands for Platform**
-   ```bash
-   curl http://localhost:6000/api/c/platforms/1/Commands
+   The CommandsService console shows:
+
    ```
+   --> Message received from RabbitMQ.
+   --> Platform Published Event Detected
+   --> Platform added!
+   ```
+
+4. **List the platforms in CommandsService again** — the new platform is now there
+   ```powershell
+   Invoke-RestMethod http://localhost:6000/api/c/Platforms/platforms
+   ```
+
+5. **Add a command to a platform and read it back**
+   ```powershell
+   Invoke-RestMethod -Method Post http://localhost:6000/api/c/platforms/1/Commands `
+     -ContentType 'application/json' `
+     -Body '{"howTo":"Build a project","commandLine":"dotnet build"}'
+
+   Invoke-RestMethod http://localhost:6000/api/c/platforms/1/Commands
+   ```
+
+### curl equivalents
+
+In Windows PowerShell use `curl.exe`, because `curl` is an alias for `Invoke-WebRequest` there.
+
+```bash
+curl http://localhost:5279/api/Platform
+curl http://localhost:6000/api/c/Platforms/platforms
+
+curl -X POST http://localhost:5279/api/Platform/CreatePlatForm \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Kubernetes","cost":"Free","publisher":"CNCF"}'
+
+curl -X POST http://localhost:6000/api/c/platforms/1/Commands \
+  -H "Content-Type: application/json" \
+  -d '{"howTo":"Build a project","commandLine":"dotnet build"}'
+
+curl http://localhost:6000/api/c/platforms/1/Commands
+```
 
 ## 📝 Notes
 
@@ -484,16 +593,4 @@ The `PlatformDataClient` class:
 - Implement authentication/authorization for production
 - Use HTTPS/TLS for production deployments
 - Secure RabbitMQ with authentication
-
-## 📄 License
-
-[Specify your license here]
-
-## 👥 Contributors
-
-[Add contributors here]
-
-## 🤝 Support
-
-For issues and questions, please open an issue in the repository.
 
